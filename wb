@@ -1,0 +1,138 @@
+import logging
+import collections
+
+import requests
+import bs4
+import csv
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger('WB')
+
+
+ParseResult = collections.namedtuple(
+    'ParseResult',
+    (
+        'model_id',
+        'link',
+        'price',
+    ),
+)
+HOST = 'https://www.wildberries.ru'
+URL = 'https://www.wildberries.ru/brands/kerry/all'
+HEADERS = (
+    'Артикул',
+    'Ссылка',
+    'Цена',
+)
+
+
+class Client:
+
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers = {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36',
+            'accept': '*/*',
+        }
+        self.result = []
+
+    def load_page(self, page: int = None):
+        params = {
+            'sort': 'popular'
+        }
+        if page and page > 1:
+            params['page'] = page
+
+        url = 'https://www.wildberries.ru/brands/kerry/all'
+        res = self.session.get(url, params=params)
+        return res.text
+
+
+    def parse_page(self, text: str, page: int = None):
+        text = self.load_page(page=page)
+        soup = bs4.BeautifulSoup(text, 'lxml')
+        container = soup.select('div.product-card.j-card-item')
+        for block in container:
+            self.parse_block(block=block)
+
+    def parse_block(self, block):
+        model_id = block.get('id')
+        if not model_id:
+            logger.error('no model_id')
+            return
+
+        link_block = block.select_one('div.product-card__wrapper a')
+        link = HOST + link_block.get('href')
+        if not link:
+            logger.error('no link')
+            return
+
+        price_block = block.select_one('div.product-card__price.j-cataloger-price')
+        if not price_block:
+            logger.error(f'no price_block on {model_id}')
+            return
+
+        price = price_block.select_one('ins.lower-price')
+
+        # Wrangler
+        price = price.text
+        price = price.replace("\xa0", '').replace('₽', '').split()[0]
+
+
+        self.result.append(ParseResult(
+            model_id=model_id,
+            link=link,
+            price=price,
+        ))
+        logger.debug('%s, %s, %s', model_id, link, price)
+        logger.debug('=' * 100)
+
+
+    # ОПРЕДЕЛЕНИЕ КОЛИЧЕСТВА СТРАНИЦ
+
+    def get_pagination_limit(self):
+        text = self.load_page()
+        soup = bs4.BeautifulSoup(text, 'lxml')
+
+        container = soup.select('span.goods-count')
+        for block in container:
+            goods_count = block.get_text(strip=True).replace("\xa0", '').split()[0]
+        limit = int(goods_count) // 100 + 1
+        if limit < 1:
+            return 1
+        return limit
+
+
+    # СОХРАНЕНИЕ РЕЗУЛЬТАТА
+
+    def save_result(self):
+        path = '/Users/hayka/PycharmProjects/pythonProject/WB/wb.csv'
+        with open(path, 'w') as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(HEADERS)
+            for item in self.result:
+                writer.writerow(item)
+
+
+    def parse_all(self):
+        limit = self.get_pagination_limit()
+        print(f'Всего страниц: {limit}')
+        for i in range(1, limit + 1):
+            print(f'Парсинг страницы {i}')
+            text = self.load_page(page=i)
+            self.parse_page(text)
+            
+           # КОГДА Я ОСТАВЛЯЮ ТОЛЬКО self.parse_page(page=i) МНЕ ВЫХОДИТ ОШИБКА: parse_page() missing 1 required positional argument: 'text'
+           В ТАКОМ ЖЕ ВИДЕ У МЕНЯ ПРОГРАММА ПАРСИТ 17 РАЗ ПЕРВУЮ СТРАНИЦУ. ПРИЧЕМ ПРИ ОТСЧЕТ ИДЕТ ПРАВИЛЬНЫЙ. ГДЕ-ТО Я ВИДИМО НЕ ПРОСТАВИЛ return, НЕ ПОНИМАЮ ГДЕ.
+
+        print(self.result)
+        logger.info(f'Получено {len(self.result)} элементов')
+
+
+        #logger.info(f'Получено {len(self.result)} элементов')
+        #self.save_result()
+
+
+if __name__ == '__main__':
+    parser = Client()
+    parser.parse_all()
